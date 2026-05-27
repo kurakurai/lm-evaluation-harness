@@ -1,0 +1,4 @@
+include: _default_template.yaml
+task: humanevalplus_multilingual_fr
+test_split: fr
+doc_to_text: "Écrivez une solution au problème suivant et assurez-vous qu'elle passe les tests :\n```python\n{{ prompt }}\n```\nVeuillez raisonner étape par étape, et mettre votre réponse finale dans un bloc de code ```python.\n"

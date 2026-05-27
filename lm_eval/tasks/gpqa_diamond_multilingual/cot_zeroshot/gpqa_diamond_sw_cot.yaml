@@ -1,0 +1,4 @@
+include: _gpqa_diamond_cot_template_yaml
+task: gpqa_diamond_sw_cot
+test_split: sw
+doc_to_text: "{{problem}}\n\nFikiria hatua kwa hatua kabla ya kujibu."

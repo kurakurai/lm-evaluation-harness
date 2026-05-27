@@ -1,0 +1,19 @@
+dataset_name: de
+doc_to_target: '{{answer_number|string}}'
+doc_to_text: "Denken Sie Schritt für Schritt, dann geben Sie «Antwort: <Zahl>» an.\n{{question}}"
+filter_list:
+- filter:
+  - function: regex
+    group_select: -1
+    regex_pattern: '(\-?\d[\d.,]*)'
+  - function: take_first
+  - function: normalize_number
+  name: flexible-extract
+generation_kwargs:
+  do_sample: false
+  until:
+  - 'Frage:'
+  - </s>
+  - <|im_end|>
+include: cot_yaml
+task: mgsm_rev2_native_cot_de

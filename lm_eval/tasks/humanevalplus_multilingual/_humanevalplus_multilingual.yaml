@@ -1,0 +1,4 @@
+group: humanevalplus_multilingual
+task:
+  - humanevalplus_multilingual_en
+  - humanevalplus_multilingual_fr

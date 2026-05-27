@@ -1,0 +1,4 @@
+include: _gpqa_diamond_cot_template_yaml
+task: gpqa_diamond_de_cot
+test_split: de
+doc_to_text: "{{problem}}\n\nDenken Sie Schritt für Schritt nach, bevor Sie antworten."

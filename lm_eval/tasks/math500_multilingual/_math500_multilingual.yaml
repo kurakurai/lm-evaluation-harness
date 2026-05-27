@@ -1,0 +1,11 @@
+group: math500_multilingual
+task:
+  - math500_multilingual_english
+  - math500_multilingual_french
+aggregate_metric_list:
+  - metric: exact_match
+    weight_by_size: true
+  - metric: math_verify
+    weight_by_size: true
+metadata:
+  version: 1.0

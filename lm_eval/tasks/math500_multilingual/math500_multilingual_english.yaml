@@ -1,0 +1,4 @@
+include: _math500_multilingual_template_yaml
+task: math500_multilingual_english
+dataset_name: English
+doc_to_text: "{{problem}}\nThink step by step, then put your final answer in \\boxed{}."

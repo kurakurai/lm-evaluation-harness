@@ -1,0 +1,4 @@
+include: _gpqa_diamond_cot_template_yaml
+task: gpqa_diamond_zh_cot
+test_split: zh
+doc_to_text: "{{problem}}\n\n请一步步思考后再回答。"

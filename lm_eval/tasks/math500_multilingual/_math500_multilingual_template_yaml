@@ -1,0 +1,22 @@
+tag:
+  - math_word_problems
+dataset_path: bezir/MATH-500-multilingual
+process_docs: !function utils.process_docs
+output_type: generate_until
+training_split: null
+test_split: test
+doc_to_text: !function utils.doc_to_text
+process_results: !function utils.process_results
+doc_to_target: "{{answer if few_shot is undefined else solution}}"
+generation_kwargs:
+  until:
+    - "Problem:"
+  do_sample: false
+  temperature: 0
+metric_list:
+  - metric: math_verify
+    aggregation: mean
+    higher_is_better: true
+num_fewshot: 0
+metadata:
+  version: 1.0

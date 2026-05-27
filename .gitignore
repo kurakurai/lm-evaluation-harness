@@ -8,6 +8,8 @@ ENV/
 env/
 *.env
 
+eval_results/
+
 # Python bytecode and build artifacts
 __pycache__/
 *.py[cod]

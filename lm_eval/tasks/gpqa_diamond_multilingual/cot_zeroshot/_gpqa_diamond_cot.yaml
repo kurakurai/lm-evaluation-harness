@@ -1,0 +1,13 @@
+group: gpqa_diamond_cot
+task:
+  - gpqa_diamond_en_cot
+  - gpqa_diamond_fr_cot
+  - gpqa_diamond_de_cot
+  - gpqa_diamond_es_cot
+  - gpqa_diamond_zh_cot
+  - gpqa_diamond_sw_cot
+aggregate_metric_list:
+  - metric: exact_match
+    weight_by_size: true
+metadata:
+  version: 1.0

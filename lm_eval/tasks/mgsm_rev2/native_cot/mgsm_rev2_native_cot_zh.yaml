@@ -1,0 +1,19 @@
+dataset_name: zh
+doc_to_target: '{{answer_number|string}}'
+doc_to_text: "请一步步思考，然后给出«答案：<数字>»。\n{{question}}"
+filter_list:
+- filter:
+  - function: regex
+    group_select: -1
+    regex_pattern: '(\-?\d[\d.,]*)'
+  - function: take_first
+  - function: normalize_number
+  name: flexible-extract
+generation_kwargs:
+  do_sample: false
+  until:
+  - 问题：
+  - </s>
+  - <|im_end|>
+include: cot_yaml
+task: mgsm_rev2_native_cot_zh

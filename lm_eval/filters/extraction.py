@@ -239,3 +239,44 @@ class MultiChoiceRegexFilter(RegexFilter):
             filtered_resps.append(filtered)
 
         return filtered_resps
+
+
+@register_filter("normalize_number")
+class NormalizeNumberFilter(Filter):
+    """Normalizes extracted numeric strings to a canonical integer-like form.
+
+    Handles common formatting issues in multilingual math benchmarks:
+    - Trailing decimal zeros: "57,00" -> "57", "28.00" -> "28"
+    - Percent suffix: "20\\%" or "20%" -> "20"
+    - French thousands separator (dot): "25.000" -> "25000"
+    - English thousands separator (comma): "25,000" -> "25000"
+    - Passes "[invalid]" and non-numeric strings through unchanged.
+    """
+
+    def __init__(self, fallback: str = "[invalid]") -> None:
+        self.fallback = fallback
+
+    def _normalize(self, value: str) -> str:
+        if not isinstance(value, str) or value == self.fallback:
+            return value
+
+        s = value.strip()
+
+        # Thousands separator: N.000 or N,000 (exactly 3 decimal digits -> separator)
+        # e.g. "25.000" (French 25000) or "25,000" (English 25000)
+        s = re.sub(r"(\d)\.(\d{3})$", r"\1\2", s)
+        s = re.sub(r"(\d),(\d{3})$", r"\1\2", s)
+
+        # Strip trailing decimal zeros: "57,00" -> "57", "28.00" -> "28"
+        s = re.sub(r"([+-]?\d+)[,.]0+$", r"\1", s)
+
+        return s if s else value
+
+    def apply(self, resps, docs):
+        result = []
+        for inst in resps:
+            if isinstance(inst, str):
+                result.append(self._normalize(inst))
+            else:
+                result.append([self._normalize(r) for r in inst])
+        return result

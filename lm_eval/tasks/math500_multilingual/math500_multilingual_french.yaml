@@ -1,0 +1,4 @@
+include: _math500_multilingual_template_yaml
+task: math500_multilingual_french
+dataset_name: French
+doc_to_text: "{{problem}}\nRéfléchissez étape par étape, puis donnez votre réponse finale dans \\boxed{}."

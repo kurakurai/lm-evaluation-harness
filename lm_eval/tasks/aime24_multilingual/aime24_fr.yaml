@@ -1,0 +1,5 @@
+include: _aime24_multilingual_template_yaml
+task: aime24_multilingual_fr
+test_split: fr
+fewshot_split: fr
+doc_to_text: "{{problem}}\nVeuillez raisonner étape par étape, et mettre votre réponse finale dans \\boxed{}."

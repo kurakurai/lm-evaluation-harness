@@ -1,0 +1,25 @@
+task: humanevalplus_multilingual
+dataset_path: lightonai/HumanEvalPlus_multilingual
+unsafe_code: true
+output_type: generate_until
+doc_to_target: "{{test}}\ncheck({{entry_point}})"
+metric_list:
+  - metric: !function utils.pass_at_k
+    aggregation: mean
+    higher_is_better: true
+    k: [1]
+generation_kwargs:
+  until:
+    - "<|im_end|>"
+    - "<|endoftext|>"
+  max_gen_toks: 30000
+  do_sample: false
+repeats: 1
+num_fewshot: 0
+filter_list:
+  - name: "create_test"
+    filter:
+      - function: "custom"
+        filter_fn: !function utils.build_predictions_instruct
+metadata:
+  version: 1.0
