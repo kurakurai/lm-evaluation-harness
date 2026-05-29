@@ -181,6 +181,12 @@ class EvaluatorConfig:
         metadata={"help": "Seeds for random, numpy, torch, fewshot (random)"},
     )
 
+    # Multi-run averaging
+    n_runs: int = field(
+        default=1,
+        metadata={"help": "Number of times to run the evaluation. Results are averaged across runs."},
+    )
+
     # Security
     trust_remote_code: bool = field(
         default=False, metadata={"help": "Trust remote code for HF datasets"}
