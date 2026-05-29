@@ -520,6 +520,7 @@ def make_table(result_dict, column: str = "results", sort_results: bool = False)
         ## alias takes care of name, and we don't print sample_len
         dic.pop("name", None)
         dic.pop("sample_len", None)
+        dic.pop("sample_len_std", None)
         dic.pop("sample_count", None)
 
         # Add indentation based on hierarchy depth
@@ -534,7 +535,7 @@ def make_table(result_dict, column: str = "results", sort_results: bool = False)
 
         for (mf), v in metric_items:
             m, _, f = mf.partition(",")
-            if m.endswith("_stderr"):
+            if m.endswith("_stderr") or m.endswith("_std"):
                 continue
 
             hib = HIGHER_IS_BETTER_SYMBOLS.get(higher_is_better.get(m), "")
