@@ -31,6 +31,21 @@ Homepage: https://github.com/google-research/google-research/tree/master/instruc
 
 * `ifeval`
 
+#### Multilingual variants
+
+Under `multilingual/`, the IFEval framework is extended to other languages. Each variant
+prefixes its instruction ids with a language code (e.g. `fr:keywords:existence`) and uses
+language-specific instruction checkers in `multilingual/instructions/` and
+`multilingual/instruction_utils/`.
+
+* `ifeval_es` — Spanish (`BSC-LT/IFEval_es`).
+* `ifeval_ca` — Catalan (`projecte-aina/IFEval_ca`).
+* `ifeval_fr` — French (`kurakurai/IFEval-FR`). French instruction checkers are ported from
+  [lightblue-tech/M-IFEval](https://github.com/lightblue-tech/M-IFEval), including French-specific
+  constraints such as informal address (tutoiement), accent presence/absence, the ethel/cedilla
+  forbidden-character check, and numbers spelled out in words. Depends only on the `ifeval` extra
+  (`nltk`, `langdetect`, `immutabledict`).
+
 ### Checklist
 
 For adding novel benchmarks/datasets to the library:

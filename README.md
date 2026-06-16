@@ -13,7 +13,7 @@ uv pip install -e ".[vllm,hf,math,ifeval]"
 
 ## Evaluation
 
-`mgsm_rev2_native_cot_fr`, `gpqa_diamond_fr_cot`, `global_mmlu_fr_cot`, `math500_multilingual_french`, `aime24_multilingual_fr`, `humanevalplus_multilingual_fr` and `aime25_multilingual_fr`
+`mgsm_rev2_native_cot_fr`, `gpqa_diamond_fr_cot`, `global_mmlu_fr_cot`, `math500_multilingual_french`, `aime24_multilingual_fr`, `humanevalplus_multilingual_fr`, `aime25_multilingual_fr` and `ifeval_fr`
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 \
@@ -22,7 +22,7 @@ nohup lm_eval \
     --model vllm \
     --model_args "pretrained=LiquidAI/LFM2.5-1.2B-Instruct,dtype=bfloat16,tensor_parallel_size=2,gpu_memory_utilization=0.7,max_model_len=16384,enable_thinking=False" \
     --apply_chat_template \
-    --tasks mgsm_rev2_native_cot_fr,gpqa_diamond_fr_cot,global_mmlu_fr_cot,math500_multilingual_french,aime24_multilingual_fr,aime25_multilingual_fr,humanevalplus_multilingual_fr \
+    --tasks mgsm_rev2_native_cot_fr,gpqa_diamond_fr_cot,global_mmlu_fr_cot,math500_multilingual_french,aime24_multilingual_fr,aime25_multilingual_fr,humanevalplus_multilingual_fr,ifeval_fr \
     --batch_size auto \
     --gen_kwargs do_sample=False,temperature=0,max_gen_toks=15000 \
     --confirm_run_unsafe_code \
