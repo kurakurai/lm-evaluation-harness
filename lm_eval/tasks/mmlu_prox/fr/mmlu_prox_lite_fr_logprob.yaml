@@ -1,0 +1,21 @@
+task: mmlu_prox_lite_fr_logprob
+dataset_path: li-lab/MMLU-ProX-Lite
+dataset_name: fr
+test_split: test
+output_type: multiple_choice
+# Log-prob (multiple_choice) counterpart of mmlu_prox_lite_fr_generative, mirroring
+# the Open LLM Leaderboard's leaderboard_mmlu_pro: score the answer letter (A-J) by
+# log-likelihood. 0-shot to match the generative variant.
+num_fewshot: 0
+doc_to_text: !function utils.doc_to_text_mc
+doc_to_choice: !function utils.doc_to_choice_mc
+doc_to_target: answer
+metric_list:
+  - metric: acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: acc_norm
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

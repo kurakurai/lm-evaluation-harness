@@ -1,0 +1,34 @@
+task: mmlu_prox_lite_fr_generative
+dataset_path: li-lab/MMLU-ProX-Lite
+dataset_name: fr
+test_split: test
+output_type: generate_until
+# French MMLU-ProX-Lite, boxed-answer generative variant (zero-shot CoT), mirroring
+# gpqa_diamond_fr_cot / global_piqa_prompted_fra_latn_fran. Up to 10 options (A-J);
+# the model must answer inside \boxed{X}. Covers all 14 subjects in one task (~588 items).
+num_fewshot: 0
+doc_to_text: !function utils.doc_to_text_boxed
+doc_to_target: answer
+filter_list:
+  - name: strict_match
+    filter:
+      - function: "regex"
+        regex_pattern: '\\boxed\{\s*(?:\\text\{)?\s*\(?\s*([A-J])(?=[\s.\):,}]|$)'
+        group_select: -1
+      - function: take_first
+generation_kwargs:
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 2048
+  until:
+    - "</s>"
+    - "<|im_end|>"
+    - "Question :"
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0

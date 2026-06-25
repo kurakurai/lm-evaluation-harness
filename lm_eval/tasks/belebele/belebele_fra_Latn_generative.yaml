@@ -1,0 +1,32 @@
+task: belebele_fra_Latn_generative
+dataset_path: facebook/belebele
+dataset_name: fra_Latn
+test_split: test
+output_type: generate_until
+# French (France) generative variant with boxed-answer format, mirroring
+# gpqa_diamond_fr_cot / global_piqa_prompted_fra_latn_fran. 4-way (A-D) MCQ:
+# the model must answer inside \boxed{A}, \boxed{B}, \boxed{C} or \boxed{D}.
+doc_to_text: "Lisez le passage suivant, puis répondez à la question en choisissant la bonne option.\n\nPassage :\n{{flores_passage}}\n\nQuestion : {{question.strip()}}\n\nA : {{mc_answer1}}\nB : {{mc_answer2}}\nC : {{mc_answer3}}\nD : {{mc_answer4}}\n\nVeuillez écrire votre réponse finale sous la forme \\boxed{A}, \\boxed{B}, \\boxed{C} ou \\boxed{D}."
+doc_to_target: "{{['A', 'B', 'C', 'D'][(correct_answer_num | int) - 1]}}"
+generation_kwargs:
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 2048
+  until:
+    - "</s>"
+    - "<|im_end|>"
+filter_list:
+  - name: strict_match
+    filter:
+      - function: "regex"
+        regex_pattern: '\\boxed\{\s*(?:\\text\{)?\s*\(?\s*([A-D])(?=[\s.\):,}]|$)'
+        group_select: -1
+      - function: take_first
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+metadata:
+  version: 1.0

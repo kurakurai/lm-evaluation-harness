@@ -50,6 +50,36 @@ doc_to_text = partial(format_cot_example, including_answer=False)
 fewshot_to_text = partial(format_cot_example, including_answer=True)
 
 
+def doc_to_text_boxed(example):
+    """Zero-shot CoT prompt asking for the answer inside \\boxed{X} (A-J)."""
+    prompt = "Question :\n" + example["question"].strip() + "\n\nOptions :\n"
+    for i in range(max_opt_num):
+        opt = example[f"option_{i}"]
+        if opt is not None:
+            prompt += "{}. {}\n".format(choices[i], opt)
+    prompt += (
+        "\nRéfléchissez étape par étape, puis terminez votre réponse par "
+        "\\boxed{X} où X est la lettre correspondant au bon choix."
+    )
+    return prompt
+
+
+def doc_to_text_mc(example):
+    """Log-prob (multiple_choice) prompt, mirroring leaderboard_mmlu_pro: question +
+    lettered options + 'Réponse :'. The choices scored are the letters (A-J)."""
+    prompt = example["question"].strip() + "\n"
+    for i in range(max_opt_num):
+        opt = example[f"option_{i}"]
+        if opt is not None:
+            prompt += "{}. {}\n".format(choices[i], opt)
+    prompt += "Réponse :"
+    return prompt
+
+
+def doc_to_choice_mc(example):
+    return [choices[i] for i in range(max_opt_num) if example[f"option_{i}"] is not None]
+
+
 def process_docs(dataset, subject):
     return dataset.filter(lambda x: x["category"] == subject)
 

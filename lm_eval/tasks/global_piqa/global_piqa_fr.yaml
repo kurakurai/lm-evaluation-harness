@@ -1,0 +1,8 @@
+group: global_piqa_fr
+task:
+  - task: global_piqa_completions_fra_latn_fran
+    task_alias: completions
+  - task: global_piqa_prompted_fra_latn_fran
+    task_alias: prompted
+metadata:
+  version: 1.0

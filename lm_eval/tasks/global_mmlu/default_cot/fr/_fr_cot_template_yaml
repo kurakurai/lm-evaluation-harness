@@ -11,7 +11,7 @@ filter_list:
         group_select: -1
         ignore_case: true
         ignore_punctuation: true
-        regex_pattern: "\\\\boxed\\{([A-D])\\}"
+        regex_pattern: '\\boxed\{\s*(?:\\text\{)?\s*\(?\s*([A-D])(?=[\s.\):,}]|$)'
       - function: "take_first"
 generation_kwargs:
   until:

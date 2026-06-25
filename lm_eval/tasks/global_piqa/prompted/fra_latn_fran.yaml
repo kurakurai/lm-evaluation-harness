@@ -1,3 +1,27 @@
 dataset_name: fra_latn_fran
 include: _template
 task: global_piqa_prompted_fra_latn_fran
+# French (France) override: boxed-answer format, mirroring gpqa_diamond_fr_cot.
+# Global PIQA is a 2-way (A/B) MCQ, so the model must answer inside \boxed{A} or \boxed{B}.
+doc_to_text: "Étant donné la situation suivante, quelle option est la plus probable d'être correcte ?\n\nSituation :\n{{prompt}}\n\nOption A : {{solution0}}\n\nOption B : {{solution1}}\n\nVeuillez écrire votre réponse finale sous la forme \\boxed{A} ou \\boxed{B}."
+doc_to_target: "{{['A', 'B'][label]}}"
+generation_kwargs:
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 2048
+  until:
+    - "</s>"
+    - "<|im_end|>"
+filter_list:
+  - name: strict_match
+    filter:
+      - function: "regex"
+        regex_pattern: '\\boxed\{\s*(?:\\text\{)?\s*\(?\s*([A-B])(?=[\s.\):,}]|$)'
+        group_select: -1
+      - function: take_first
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true

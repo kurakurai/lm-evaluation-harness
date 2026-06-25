@@ -2,3 +2,14 @@ include: _gpqa_diamond_cot_template_yaml
 task: gpqa_diamond_fr_cot
 test_split: fr
 doc_to_text: "{{problem}}\n\nRéfléchissez étape par étape avant de répondre."
+# fr-only override: tolerant boxed-letter extraction (handles \boxed{A. ...},
+# \boxed{(A)}, \boxed{\text{A}} etc.). Leaves the shared multilingual template as-is.
+filter_list:
+  - name: "flexible-extract"
+    filter:
+      - function: "multi_choice_regex"
+        group_select: -1
+        ignore_case: true
+        ignore_punctuation: true
+        regex_pattern: '\\boxed\{\s*(?:\\text\{)?\s*\(?\s*([A-D])(?=[\s.\):,}]|$)'
+      - function: "take_first"
