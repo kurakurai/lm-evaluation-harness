@@ -13,7 +13,7 @@ uv pip install -e ".[vllm,hf,math,ifeval]"
 
 ## Evaluation
 
-`mgsm_rev2_native_cot_fr`, `gpqa_diamond_fr_cot`, `global_mmlu_fr_cot`, `math500_multilingual_french`, `aime24_multilingual_fr`, `humanevalplus_multilingual_fr`, `aime25_multilingual_fr`, `ifeval_fr` and `mmlu_prox_lite_fr_generative`
+`mgsm_rev2_native_cot_fr`, `gpqa_diamond_fr_cot`, `global_mmlu_fr_cot`, `math500_multilingual_french`, `aime24_multilingual_fr`, `humanevalplus_multilingual_fr`, `aime25_multilingual_fr`, `ifeval_fr`, `mbpp_plus_fr` and `mmlu_prox_lite_fr_generative`
 
 ```bash
 CUDA_VISIBLE_DEVICES=6,7 \
@@ -22,7 +22,7 @@ nohup lm_eval \
     --model vllm \
     --model_args "pretrained=Qwen/Qwen3.5-0.8B,dtype=bfloat16,tensor_parallel_size=2,gpu_memory_utilization=0.7,max_model_len=16384,enable_thinking=False" \
     --apply_chat_template \
-    --tasks mgsm_rev2_native_cot_fr,gpqa_diamond_fr_cot,global_mmlu_fr_cot,math500_multilingual_french,aime24_multilingual_fr,aime25_multilingual_fr,humanevalplus_multilingual_fr,ifeval_fr,global_piqa_prompted_fra_latn_fran,belebele_fra_Latn_generative,mmlu_prox_lite_fr_generative \
+    --tasks mgsm_rev2_native_cot_fr,gpqa_diamond_fr_cot,global_mmlu_fr_cot,math500_multilingual_french,aime24_multilingual_fr,aime25_multilingual_fr,humanevalplus_multilingual_fr,ifeval_fr,mbpp_plus_fr,global_piqa_prompted_fra_latn_fran,belebele_fra_Latn_generative,mmlu_prox_lite_fr_generative \
     --batch_size auto \
     --gen_kwargs do_sample=True,temperature=0.6,top_p=0.95,top_k=20,max_gen_toks=15000 \
     --confirm_run_unsafe_code \
@@ -46,7 +46,7 @@ CUDA_VISIBLE_DEVICES=6,7 \
 nohup python -m lm_eval.tasks.multi_if_fr \
     --model vllm \
     --model_args "pretrained=Qwen/Qwen3.5-0.8B,dtype=bfloat16,tensor_parallel_size=2,gpu_memory_utilization=0.7,max_model_len=16384,enable_thinking=False" \
-    --gen_kwargs do_sample=True,temperature=0.6,top_p=0.95,max_gen_toks=1024 \
+    --gen_kwargs do_sample=True,temperature=0.6,top_p=0.95,max_gen_toks=8000 \
     --batch_size auto \
     --output_path eval_results/french_eval_result \
     --log_samples \
