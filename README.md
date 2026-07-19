@@ -46,7 +46,7 @@ CUDA_VISIBLE_DEVICES=6,7 \
 nohup python -m lm_eval.tasks.multi_if_fr \
     --model vllm \
     --model_args "pretrained=Qwen/Qwen3.5-0.8B,dtype=bfloat16,tensor_parallel_size=2,gpu_memory_utilization=0.7,max_model_len=16384,enable_thinking=False" \
-    --gen_kwargs do_sample=True,temperature=0.6,top_p=0.95,max_gen_toks=8000 \
+    --gen_kwargs do_sample=True,temperature=0.6,top_p=0.95,max_gen_toks=4000 \
     --batch_size auto \
     --output_path eval_results/french_eval_result \
     --log_samples \
