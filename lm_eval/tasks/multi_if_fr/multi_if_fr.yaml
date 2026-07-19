@@ -1,0 +1,43 @@
+# Multi-IF (French) — faithful multi-turn instruction-following benchmark.
+#
+# NOTE: This is NOT a standard `lm_eval --tasks` entry. Multi-IF requires feeding
+# the model's own response from turn N back into turn N+1, which the harness's
+# batched request flow cannot do. It is therefore run with a dedicated runner:
+#
+#     python -m lm_eval.tasks.multi_if_fr --model vllm --model_args "..." ...
+#
+# This file holds the default configuration (dataset + generation settings).
+# Anything here can be overridden on the command line (e.g. --gen_kwargs).
+
+task: multi_if_fr
+dataset_path: facebook/Multi-IF
+dataset_split: train
+# Value of the `language` column to keep (full name, capitalized, as stored in the dataset).
+language: French
+num_turns: 3
+
+# Default generation settings. Override at launch with --gen_kwargs, e.g.
+#   --gen_kwargs do_sample=True,temperature=0.6,top_p=0.9,max_gen_toks=1024
+generation_kwargs:
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 1024
+  until: []
+
+# Metrics reported per turn (turn_1 / turn_2 / turn_3) plus a macro average
+# across turns. Scoring reuses the standard IFEval verifiers in
+# lm_eval/tasks/ifeval/instructions_registry.py.
+#
+# HEADLINE metric = `multi_if_composite`: the mean of the four sub-metrics below
+# (the "composite" labs report for Multi-IF), averaged across the 3 turns. This
+# matches the LFM2 technical report (App. C: "Average accuracy across all 3
+# turns") and the Multi-IF paper's overall-ranking figure. `multi_if_composite_final_turn`
+# (turn 3 only) is also emitted for the leaderboard/paper-analysis convention.
+metric_list:
+  - prompt_level_strict_acc
+  - inst_level_strict_acc
+  - prompt_level_loose_acc
+  - inst_level_loose_acc
+
+metadata:
+  version: 1.0

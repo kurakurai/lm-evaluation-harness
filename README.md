@@ -13,7 +13,7 @@ uv pip install -e ".[vllm,hf,math,ifeval]"
 
 ## Evaluation
 
-`mgsm_rev2_native_cot_fr`, `gpqa_diamond_fr_cot`, `global_mmlu_fr_cot`, `math500_multilingual_french`, `aime24_multilingual_fr`, `humanevalplus_multilingual_fr`, `aime25_multilingual_fr`, `ifeval_fr`, `global_piqa_prompted_fra_latn_fran`, `belebele_fra_Latn_generative` and `mmlu_prox_lite_fr_generative`
+`mgsm_rev2_native_cot_fr`, `gpqa_diamond_fr_cot`, `global_mmlu_fr_cot`, `math500_multilingual_french`, `aime24_multilingual_fr`, `humanevalplus_multilingual_fr`, `aime25_multilingual_fr`, `ifeval_fr` and `mmlu_prox_lite_fr_generative`
 
 ```bash
 CUDA_VISIBLE_DEVICES=6,7 \
@@ -31,3 +31,26 @@ nohup lm_eval \
     --n_runs 10 \
     > logs/qwen3.5-0.8B_bench.log 2>&1 &
 ```
+
+### Multi-IF (French)
+
+`multi_if_fr` is the faithful multi-turn French subset of
+[Multi-IF](https://huggingface.co/datasets/facebook/Multi-IF). Because each turn feeds
+the model's own previous response back as context, it **cannot** run inside the shared
+`--tasks` list (the harness batches all requests up front). It has a dedicated runner
+that reuses the same `--model` / `--model_args` / `--gen_kwargs` flags and writes into
+`eval_results/` in the same layout — just add one extra line to the bench script:
+
+```bash
+CUDA_VISIBLE_DEVICES=6,7 \
+nohup python -m lm_eval.tasks.multi_if_fr \
+    --model vllm \
+    --model_args "pretrained=Qwen/Qwen3.5-0.8B,dtype=bfloat16,tensor_parallel_size=2,gpu_memory_utilization=0.7,max_model_len=16384,enable_thinking=False" \
+    --gen_kwargs do_sample=True,temperature=0.6,top_p=0.95,max_gen_toks=1024 \
+    --batch_size auto \
+    --output_path eval_results/french_eval_result \
+    --log_samples \
+    --n_runs 10 \
+    > logs/qwen3.5-0.8B_multi_if_fr.log 2>&1 &
+```
+
