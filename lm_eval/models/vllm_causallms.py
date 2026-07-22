@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import logging
 import os
 import queue
@@ -54,31 +55,38 @@ if TYPE_CHECKING:
 eval_logger = logging.getLogger(__name__)
 
 
-def _dp_generate_worker(
+# Sentinel shard id for an engine that failed to build (see _dp_worker_loop).
+_DP_INIT_FAILED = -1
+
+
+def _dp_worker_loop(
+    task_queue,
     result_queue,
     rank: int,
     tp_size: int,
     gpu_ids: list[str],
     model_args: dict,
-    sampling_params: list[SamplingParams],
-    requests: list[list[int]],
     lora_request: LoRARequest | None,
 ):
-    """Run generation for one data-parallel shard in its own process.
+    """Long-lived data-parallel replica: build one vLLM engine, then serve.
 
     Data parallelism is implemented as ``data_parallel_size`` fully independent
-    single-replica vLLM engines (Ray is NOT used). This function is the entry
-    point for each replica; it is spawned via ``multiprocessing`` (spawn start
-    method) so every replica gets a clean interpreter and owns a distinct block
-    of ``tp_size`` GPUs (``gpu_ids[rank * tp_size : (rank + 1) * tp_size]``). It
-    must stay module-level so the spawn start method can pickle it.
+    single-replica vLLM engines (Ray is NOT used). Each replica is spawned once
+    via ``multiprocessing`` (spawn start method) so it gets a clean interpreter
+    and owns a distinct block of ``tp_size`` GPUs
+    (``gpu_ids[rank * tp_size : (rank + 1) * tp_size]``). The engine is built
+    **exactly once**; the replica then loops, serving every generation batch from
+    ``task_queue`` and returning results on ``result_queue``, so the model weights
+    load a single time no matter how many batches / runs / turns follow. A
+    ``None`` task is the shutdown sentinel. This function must stay module-level
+    so the spawn start method can pickle it.
 
-    The result (or, on failure, a ``RuntimeError`` carrying the traceback) is
-    pushed onto ``result_queue`` tagged with ``rank`` so the driver can reassemble
-    outputs in order. We spawn plain (non-daemonic) processes rather than a
-    ``multiprocessing.Pool`` because vLLM's V1 engine spawns its own
-    ``EngineCore`` child process, and daemonic pool workers cannot have children.
+    We spawn plain (non-daemonic) processes rather than a ``multiprocessing.Pool``
+    because vLLM's V1 engine spawns its own ``EngineCore`` child process, and
+    daemonic pool workers cannot have children.
     """
+    import traceback
+
     try:
         # Pin this replica to its block of GPUs *before* torch/vllm touch CUDA,
         # so the inner engine only ever sees this replica's devices.
@@ -104,16 +112,36 @@ def _dp_generate_worker(
             k: v for k, v in model_args.items() if k != "distributed_executor_backend"
         }
         llm = LLM(**model_args)
-        outputs = llm.generate(
-            [TokensPrompt(prompt_token_ids=request) for request in requests],
-            sampling_params=sampling_params,
-            lora_request=lora_request,
-        )
-        result_queue.put((rank, outputs))
-    except Exception as e:  # surface failures to the driver instead of hanging
-        import traceback
+    except Exception:  # engine failed to build — tell the driver, then exit
+        result_queue.put((_DP_INIT_FAILED, RuntimeError(traceback.format_exc())))
+        return
 
-        result_queue.put((rank, RuntimeError(traceback.format_exc() or str(e))))
+    # Serve loop: reuse the one engine for every batch until the sentinel.
+    while True:
+        task = task_queue.get()
+        if task is None:
+            break
+        shard_index, requests, sampling_params = task
+        try:
+            outputs = llm.generate(
+                [TokensPrompt(prompt_token_ids=request) for request in requests],
+                sampling_params=sampling_params,
+                lora_request=lora_request,
+            )
+            result_queue.put((shard_index, outputs))
+        except Exception:  # surface failures to the driver instead of hanging
+            result_queue.put((shard_index, RuntimeError(traceback.format_exc())))
+
+    # Graceful shutdown: drop the engine so vLLM reaps its EngineCore child
+    # process (and frees its GPU memory) before this process exits. Without this
+    # the child can be orphaned if the driver force-terminates us mid-teardown.
+    try:
+        del llm
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
 
 
 @register_model("vllm")
@@ -185,6 +213,9 @@ class VLLM(TemplateLM):
         # Each replica owns a distinct contiguous block of `tensor_parallel_size`
         # GPUs, hence data_parallel_size * tensor_parallel_size devices in total.
         self._dp_gpu_ids: list[str] | None = None
+        # Persistent DP replicas are spawned lazily on first generate (see
+        # `_start_dp_workers`) and reused thereafter, so the engines load once.
+        self._dp_started = False
         if self.data_parallel_size > 1:
             visible = os.environ.get("CUDA_VISIBLE_DEVICES")
             if visible:
@@ -492,22 +523,82 @@ class VLLM(TemplateLM):
             )
             return outputs
 
+    def _start_dp_workers(self) -> None:
+        """Spawn the persistent data-parallel replicas once, on first use.
+
+        Mirrors the single-engine path, which builds ``self.model`` once in
+        ``__init__`` and reuses it: here we spawn ``data_parallel_size`` long-lived
+        replica processes (each loading its engine a single time) and keep them
+        warm for every subsequent batch — across all ``generate_until`` calls,
+        ``n_runs`` iterations, and Multi-IF turns.
+        """
+        if self._dp_started:
+            return
+        import multiprocessing
+
+        # spawn (not fork): the driver may already have touched CUDA, and each
+        # vLLM engine must start from a clean interpreter.
+        ctx = multiprocessing.get_context("spawn")
+        self._dp_task_queue = ctx.Queue()
+        self._dp_result_queue = ctx.Queue()
+        self._dp_procs = []
+        for rank in range(self.data_parallel_size):
+            p = ctx.Process(
+                target=_dp_worker_loop,
+                args=(
+                    self._dp_task_queue,
+                    self._dp_result_queue,
+                    rank,
+                    self.tensor_parallel_size,
+                    self._dp_gpu_ids,
+                    self.model_args,
+                    self.lora_request,
+                ),
+                daemon=False,
+            )
+            p.start()
+            self._dp_procs.append(p)
+        self._dp_started = True
+        # Ensure the replicas (which hold GPUs) are torn down at interpreter exit
+        # even if __del__ never runs.
+        atexit.register(self._shutdown_dp_workers)
+
+    def _shutdown_dp_workers(self) -> None:
+        """Signal the persistent replicas to exit and reap them (idempotent)."""
+        if not getattr(self, "_dp_started", False):
+            return
+        self._dp_started = False
+        try:
+            for _ in self._dp_procs:
+                self._dp_task_queue.put(None)
+        except Exception:
+            pass
+        # Give each replica time to shut its engine down gracefully (vLLM engine
+        # teardown can take a while); only force-kill if it overruns.
+        for p in self._dp_procs:
+            p.join(timeout=60)
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=10)
+                if p.is_alive():
+                    p.kill()
+                    p.join()
+
     def _data_parallel_generate(
         self,
         requests: list[list[int]],
         sampling_params: list[SamplingParams],
     ) -> list:
-        """Generate across ``data_parallel_size`` independent vLLM engines.
+        """Generate across ``data_parallel_size`` persistent vLLM engines.
 
-        Each replica runs in its own spawned process on a distinct block of GPUs
-        (see :func:`_dp_generate_worker`); there is no Ray and no shared engine.
-        Requests are split across replicas with ``distribute`` in interleaved
-        fashion — since requests arrive length-sorted, interleaving gives every
-        replica a comparable mix of long and short prompts so they finish around
-        the same time — and reassembled into the original order with
-        ``undistribute``.
+        Replicas are spawned once (see :func:`_dp_worker_loop`) and reused; there
+        is no Ray and no shared engine. Requests are split across replicas with
+        ``distribute`` in interleaved fashion — since requests arrive
+        length-sorted, interleaving gives every replica a comparable mix of long
+        and short prompts so they finish around the same time — dispatched over a
+        queue, and reassembled into the original order with ``undistribute``.
         """
-        import multiprocessing
+        self._start_dp_workers()
 
         # Interleaved split of both requests and their (already per-request)
         # sampling params, so shard i holds requests[i], requests[i + dp], ...
@@ -516,69 +607,50 @@ class VLLM(TemplateLM):
             list(sp) for sp in distribute(self.data_parallel_size, sampling_params)
         ]
 
-        # spawn (not fork): the driver may already have touched CUDA, and each
-        # vLLM engine must start from a clean interpreter.
-        ctx = multiprocessing.get_context("spawn")
-        result_queue = ctx.Queue()
+        # Dispatch one batch per non-empty shard to the warm replicas. An empty
+        # shard (fewer requests than replicas) needs no work.
         results_by_rank: dict[int, Any] = {}
-        procs: dict[int, Any] = {}
-        for rank, (req, sp) in enumerate(
-            zip(req_shards, sp_shards, strict=True)
-        ):
-            # A shard can be empty when there are fewer requests than replicas;
-            # skip it rather than pay for a whole engine that generates nothing.
+        submitted = 0
+        for rank, (req, sp) in enumerate(zip(req_shards, sp_shards, strict=True)):
             if not req:
                 results_by_rank[rank] = []
                 continue
-            p = ctx.Process(
-                target=_dp_generate_worker,
-                args=(
-                    result_queue,
-                    rank,
-                    self.tensor_parallel_size,
-                    self._dp_gpu_ids,
-                    self.model_args,
-                    sp,
-                    req,
-                    self.lora_request,
-                ),
-            )
-            p.start()
-            procs[rank] = p
+            self._dp_task_queue.put((rank, req, sp))
+            submitted += 1
 
-        # Drain the queue as results arrive (a worker cannot join until its output
-        # has been consumed). Poll with a timeout so a replica that dies *without*
-        # reporting — e.g. a segfault or the OOM killer — surfaces as an error
-        # instead of hanging the driver forever.
-        try:
-            pending = set(procs)
-            while pending:
-                try:
-                    rank, payload = result_queue.get(timeout=5)
-                except queue.Empty:
-                    for r in list(pending):
-                        p = procs[r]
-                        if not p.is_alive() and p.exitcode not in (0, None):
-                            raise RuntimeError(
-                                f"data-parallel replica {r} died (exit code "
-                                f"{p.exitcode}) before returning results."
-                            )
-                    continue
-                if isinstance(payload, Exception):
-                    raise RuntimeError(
-                        f"data-parallel replica {rank} failed:\n{payload}"
-                    )
-                results_by_rank[rank] = payload
-                pending.discard(rank)
-        finally:
-            for p in procs.values():
-                if p.is_alive():
-                    p.terminate()
-                p.join()
+        # Collect exactly `submitted` results. Poll with a timeout so a replica
+        # that dies *without* reporting — e.g. a segfault or the OOM killer —
+        # surfaces as an error instead of hanging the driver forever.
+        received = 0
+        while received < submitted:
+            try:
+                rank, payload = self._dp_result_queue.get(timeout=5)
+            except queue.Empty:
+                for p in self._dp_procs:
+                    if not p.is_alive() and p.exitcode not in (0, None):
+                        raise RuntimeError(
+                            f"data-parallel replica died (exit code {p.exitcode}) "
+                            "before returning results."
+                        )
+                continue
+            if isinstance(payload, Exception):
+                where = "engine init" if rank == _DP_INIT_FAILED else f"shard {rank}"
+                raise RuntimeError(
+                    f"data-parallel replica failed during {where}:\n{payload}"
+                )
+            results_by_rank[rank] = payload
+            received += 1
 
         # Flatten shards back into the original (pre-distribute) request order.
         results = [results_by_rank[r] for r in range(self.data_parallel_size)]
         return undistribute(results)
+
+    def __del__(self):
+        # Best-effort teardown of persistent DP replicas when the model is GC'd.
+        try:
+            self._shutdown_dp_workers()
+        except Exception:
+            pass
 
     def loglikelihood(
         self, requests: list[Instance], disable_tqdm: bool = False
