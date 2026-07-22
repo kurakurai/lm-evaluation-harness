@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 from importlib.metadata import version
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
@@ -51,6 +52,68 @@ if TYPE_CHECKING:
     from lm_eval.api.instance import Instance
 
 eval_logger = logging.getLogger(__name__)
+
+
+def _dp_generate_worker(
+    result_queue,
+    rank: int,
+    tp_size: int,
+    gpu_ids: list[str],
+    model_args: dict,
+    sampling_params: list[SamplingParams],
+    requests: list[list[int]],
+    lora_request: LoRARequest | None,
+):
+    """Run generation for one data-parallel shard in its own process.
+
+    Data parallelism is implemented as ``data_parallel_size`` fully independent
+    single-replica vLLM engines (Ray is NOT used). This function is the entry
+    point for each replica; it is spawned via ``multiprocessing`` (spawn start
+    method) so every replica gets a clean interpreter and owns a distinct block
+    of ``tp_size`` GPUs (``gpu_ids[rank * tp_size : (rank + 1) * tp_size]``). It
+    must stay module-level so the spawn start method can pickle it.
+
+    The result (or, on failure, a ``RuntimeError`` carrying the traceback) is
+    pushed onto ``result_queue`` tagged with ``rank`` so the driver can reassemble
+    outputs in order. We spawn plain (non-daemonic) processes rather than a
+    ``multiprocessing.Pool`` because vLLM's V1 engine spawns its own
+    ``EngineCore`` child process, and daemonic pool workers cannot have children.
+    """
+    try:
+        # Pin this replica to its block of GPUs *before* torch/vllm touch CUDA,
+        # so the inner engine only ever sees this replica's devices.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(
+            gpu_ids[rank * tp_size : (rank + 1) * tp_size]
+        )
+
+        # VLLM_DP_* vars may leak in from the driver (EngineArgs / chat-template
+        # resolution set them). They would make this DP=1 engine compute a
+        # nonzero DP-adjusted local_rank and assert in gpu_worker.init_device.
+        for _k in (
+            "VLLM_DP_RANK",
+            "VLLM_DP_RANK_LOCAL",
+            "VLLM_DP_SIZE",
+            "VLLM_DP_MASTER_IP",
+            "VLLM_DP_MASTER_PORT",
+        ):
+            os.environ.pop(_k, None)
+
+        # Each replica is a plain single engine (TP only, DP=1). Drop any executor
+        # backend hint so vLLM auto-picks (uni for TP=1, mp for TP>1).
+        model_args = {
+            k: v for k, v in model_args.items() if k != "distributed_executor_backend"
+        }
+        llm = LLM(**model_args)
+        outputs = llm.generate(
+            [TokensPrompt(prompt_token_ids=request) for request in requests],
+            sampling_params=sampling_params,
+            lora_request=lora_request,
+        )
+        result_queue.put((rank, outputs))
+    except Exception as e:  # surface failures to the driver instead of hanging
+        import traceback
+
+        result_queue.put((rank, RuntimeError(traceback.format_exc() or str(e))))
 
 
 @register_model("vllm")
@@ -112,14 +175,34 @@ class VLLM(TemplateLM):
         if self.data_parallel_size > 1 and kwargs.get("enable_expert_parallel", False):
             raise ValueError(
                 "data_parallel_size > 1 is not supported with enable_expert_parallel=True. "
-                "lm-eval dispatches data parallelism through independent Ray workers, which "
-                "does not provide a single coordinated MoE expert-parallel engine. "
+                "lm-eval dispatches data parallelism as independent single-replica engines "
+                "(one per GPU group), which does not provide a single coordinated MoE "
+                "expert-parallel engine. "
                 "Use tensor_parallel_size > 1 with data_parallel_size=1 instead."
             )
-        if self.data_parallel_size > 1 and not find_spec("ray"):
-            raise ModuleNotFoundError(
-                "ray is required for data parallelism. Please install ray using `pip install ray`."
-            )
+        # Resolve and validate the per-replica GPU assignment for data parallelism
+        # up front, so a misconfiguration fails fast (before any weights load).
+        # Each replica owns a distinct contiguous block of `tensor_parallel_size`
+        # GPUs, hence data_parallel_size * tensor_parallel_size devices in total.
+        self._dp_gpu_ids: list[str] | None = None
+        if self.data_parallel_size > 1:
+            visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+            if visible:
+                gpu_ids = [d for d in visible.split(",") if d != ""]
+            else:
+                import torch
+
+                gpu_ids = [str(i) for i in range(torch.cuda.device_count())]
+            needed = self.data_parallel_size * self.tensor_parallel_size
+            if len(gpu_ids) < needed:
+                raise ValueError(
+                    f"data_parallel_size={self.data_parallel_size} x "
+                    f"tensor_parallel_size={self.tensor_parallel_size} needs {needed} GPUs, "
+                    f"but only {len(gpu_ids)} are available "
+                    f"(CUDA_VISIBLE_DEVICES={visible!r}). Reduce the parallel sizes or "
+                    "expose more GPUs."
+                )
+            self._dp_gpu_ids = gpu_ids[:needed]
         self.model_args = {
             "model": pretrained,
             "revision": revision,
@@ -145,8 +228,10 @@ class VLLM(TemplateLM):
         if self.data_parallel_size <= 1:
             self.model = LLM(**self.model_args)  # type: ignore[invalid-argument-type]
         else:
-            # note: DP is always dispatched through ray actors; the mp data-parallel
-            # path was dropped upstream for dense models.
+            # Data parallelism is dispatched at generation time as one independent
+            # vLLM engine per replica, each spawned in its own process (see
+            # `_model_generate`). vLLM forbids DP inside a single process, so we do
+            # NOT build `self.model` here; the driver process holds no engine/GPU.
             eval_logger.warning(
                 "You might experience occasional issues with model weight downloading when data_parallel is in use. To ensure stable performance, run with data_parallel_size=1 until the weights are downloaded and cached."
             )
@@ -397,60 +482,7 @@ class VLLM(TemplateLM):
                 "list[SamplingParams]", [sampling_params] * len(requests)
             )
         if self.data_parallel_size > 1:
-            import ray
-
-            # num_gpus reserves GPUs per actor so ray sets CUDA_VISIBLE_DEVICES
-            # correctly; without it the inner LLM sees 0 devices and asserts
-            # in gpu_worker.init_device.
-            @ray.remote(num_gpus=self.tensor_parallel_size)
-            def dp_replica(
-                model_args: dict,
-                sampling_params: list[SamplingParams],
-                requests: list[list[int]],
-                lora_request: LoRARequest,
-            ):
-                # inner LLM must not itself use ray — nested placement groups
-                # deadlock on V1. Let vLLM auto-pick (uni for TP=1, mp for TP>1).
-                model_args = {
-                    k: v
-                    for k, v in model_args.items()
-                    if k != "distributed_executor_backend"
-                }
-                # ray propagates driver env vars into actors. VLLM_DP_* can
-                # leak in from EngineArgs/chat-template resolution on the
-                # driver and make the inner LLM (DP=1) compute a nonzero
-                # DP-adjusted local_rank → AssertionError in gpu_worker.
-                for _k in (
-                    "VLLM_DP_RANK",
-                    "VLLM_DP_RANK_LOCAL",
-                    "VLLM_DP_SIZE",
-                    "VLLM_DP_MASTER_IP",
-                    "VLLM_DP_MASTER_PORT",
-                ):
-                    os.environ.pop(_k, None)
-                llm = LLM(**model_args)
-                return llm.generate(
-                    [TokensPrompt(prompt_token_ids=request) for request in requests],
-                    sampling_params=sampling_params,
-                    lora_request=lora_request,
-                )
-
-            # dispatch requests to all self.data_parallel_size workers, in interleaved fashion
-            # interleaved important to balance context lengths across workers
-            requests = [list(x) for x in distribute(self.data_parallel_size, requests)]  # type: ignore
-            sampling_params = [
-                list(sp) for sp in distribute(self.data_parallel_size, sampling_params)
-            ]  # type: ignore
-            inputs = (
-                (self.model_args, sp, req, self.lora_request)
-                for req, sp in zip(requests, sampling_params, strict=True)  # type: ignore
-            )
-            object_refs = [dp_replica.remote(*x) for x in inputs]
-            results = ray.get(object_refs)
-            # Invoke ray.shutdown() to prevent hang-ups if subsequent calls required.
-            ray.shutdown()
-            # flatten results
-            return undistribute(results)
+            return self._data_parallel_generate(requests, sampling_params)
         else:
             outputs = self.model.generate(
                 [TokensPrompt(prompt_token_ids=request) for request in requests],
@@ -459,6 +491,94 @@ class VLLM(TemplateLM):
                 lora_request=self.lora_request,
             )
             return outputs
+
+    def _data_parallel_generate(
+        self,
+        requests: list[list[int]],
+        sampling_params: list[SamplingParams],
+    ) -> list:
+        """Generate across ``data_parallel_size`` independent vLLM engines.
+
+        Each replica runs in its own spawned process on a distinct block of GPUs
+        (see :func:`_dp_generate_worker`); there is no Ray and no shared engine.
+        Requests are split across replicas with ``distribute`` in interleaved
+        fashion — since requests arrive length-sorted, interleaving gives every
+        replica a comparable mix of long and short prompts so they finish around
+        the same time — and reassembled into the original order with
+        ``undistribute``.
+        """
+        import multiprocessing
+
+        # Interleaved split of both requests and their (already per-request)
+        # sampling params, so shard i holds requests[i], requests[i + dp], ...
+        req_shards = [list(x) for x in distribute(self.data_parallel_size, requests)]
+        sp_shards = [
+            list(sp) for sp in distribute(self.data_parallel_size, sampling_params)
+        ]
+
+        # spawn (not fork): the driver may already have touched CUDA, and each
+        # vLLM engine must start from a clean interpreter.
+        ctx = multiprocessing.get_context("spawn")
+        result_queue = ctx.Queue()
+        results_by_rank: dict[int, Any] = {}
+        procs: dict[int, Any] = {}
+        for rank, (req, sp) in enumerate(
+            zip(req_shards, sp_shards, strict=True)
+        ):
+            # A shard can be empty when there are fewer requests than replicas;
+            # skip it rather than pay for a whole engine that generates nothing.
+            if not req:
+                results_by_rank[rank] = []
+                continue
+            p = ctx.Process(
+                target=_dp_generate_worker,
+                args=(
+                    result_queue,
+                    rank,
+                    self.tensor_parallel_size,
+                    self._dp_gpu_ids,
+                    self.model_args,
+                    sp,
+                    req,
+                    self.lora_request,
+                ),
+            )
+            p.start()
+            procs[rank] = p
+
+        # Drain the queue as results arrive (a worker cannot join until its output
+        # has been consumed). Poll with a timeout so a replica that dies *without*
+        # reporting — e.g. a segfault or the OOM killer — surfaces as an error
+        # instead of hanging the driver forever.
+        try:
+            pending = set(procs)
+            while pending:
+                try:
+                    rank, payload = result_queue.get(timeout=5)
+                except queue.Empty:
+                    for r in list(pending):
+                        p = procs[r]
+                        if not p.is_alive() and p.exitcode not in (0, None):
+                            raise RuntimeError(
+                                f"data-parallel replica {r} died (exit code "
+                                f"{p.exitcode}) before returning results."
+                            )
+                    continue
+                if isinstance(payload, Exception):
+                    raise RuntimeError(
+                        f"data-parallel replica {rank} failed:\n{payload}"
+                    )
+                results_by_rank[rank] = payload
+                pending.discard(rank)
+        finally:
+            for p in procs.values():
+                if p.is_alive():
+                    p.terminate()
+                p.join()
+
+        # Flatten shards back into the original (pre-distribute) request order.
+        results = [results_by_rank[r] for r in range(self.data_parallel_size)]
+        return undistribute(results)
 
     def loglikelihood(
         self, requests: list[Instance], disable_tqdm: bool = False
